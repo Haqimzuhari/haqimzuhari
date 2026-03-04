@@ -4,20 +4,80 @@ A collection of Dockerfiles and docker-compose configurations for local developm
 
 ---
 
+## Common Commands
+
+```bash
+# Build and start
+# -d        : detached mode, run containers in background
+# --build   : force rebuild images before starting
+docker compose up -d --build
+
+# Or separately
+docker compose build   # build images only
+docker compose up -d   # start containers (uses existing images)
+
+# View logs
+# -f : follow/stream logs in real time (ctrl+c to exit)
+docker compose logs -f
+docker compose logs -f node   # single service only
+
+# List services
+docker compose ps
+
+# Access container shell (use service name, not container name)
+docker compose exec node sh
+docker compose exec php bash
+docker compose exec python bash
+
+# Run one-off command
+docker compose exec php composer install
+docker compose exec node npm install
+
+# Single service — rebuild or restart one container without touching others
+docker compose up -d --build node     # rebuild and restart node only
+docker compose restart node           # restart without rebuilding
+
+# Stop
+docker compose down
+
+# Stop and reset database volumes
+docker compose down -v
+rm -rf mysql-data postgres-data
+
+# Remove dangling/unused images (middle ground — does not affect running containers)
+docker image prune
+
+# Reset entire project environment (scoped to current folder only)
+# -v                : remove named volumes (wipes database data)
+# --rmi all         : remove images built for this project
+# --remove-orphans  : remove containers no longer defined in compose file
+docker compose down -v --rmi all --remove-orphans
+# Then rebuild fresh
+docker compose up -d --build
+```
+
+---
+
 ## Table of Contents
 
-- [Node.js](#nodejs)
-- [Python](#python)
-- [PHP](#php)
-- [Databases](#databases) (SQLite, MySQL, PostgreSQL)
-- [Quick Start](#quick-start)
-- [Notes](#notes)
+- [Docker Development Environment](#docker-development-environment)
+  - [Common Commands](#common-commands)
+  - [Table of Contents](#table-of-contents)
+  - [Node.js](#nodejs)
+  - [Python](#python)
+  - [PHP / Laravel](#php--laravel)
+  - [Databases](#databases)
+    - [SQLite](#sqlite)
+    - [MySQL](#mysql)
+    - [PostgreSQL](#postgresql)
+    - [Redis](#redis)
+  - [Environment Variables (.env)](#environment-variables-env)
+  - [Production](#production)
+  - [Notes](#notes)
 
 ---
 
 ## Node.js
-
-### Without Nginx
 
 **Dockerfile.node**
 
@@ -46,112 +106,20 @@ services:
     ports:
       - "3000:3000"
     tty: true
-    command: sh -c "cd web && npm run dev"
+    # command: sh -c "npm run dev"
     networks:
       - app_network
 
 networks:
   app_network:
-    driver: bridge
+    external: true
 ```
 
 Access: `http://localhost:3000`
 
 ---
 
-### With Nginx
-
-**Dockerfile.node**
-
-```dockerfile
-FROM node:22-slim
-
-RUN apt-get update && apt-get install -y \
-    nginx \
-    supervisor \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN npm install -g npm@latest
-
-WORKDIR /app
-
-EXPOSE 80
-
-CMD ["/usr/bin/supervisord", "-n"]
-```
-
-**docker-compose.yml**
-
-```yaml
-services:
-  node:
-    build:
-      context: .
-      dockerfile: Dockerfile.node
-    container_name: node-container
-    working_dir: /app
-    volumes:
-      - .:/app
-      - ./nginx/node.conf:/etc/nginx/sites-available/default
-      - ./supervisor/node.conf:/etc/supervisor/conf.d/node.conf
-    ports:
-      - "80:80"
-    networks:
-      - app_network
-
-networks:
-  app_network:
-    driver: bridge
-```
-
-**nginx/node.conf**
-
-```nginx
-server {
-    listen 80;
-    server_name localhost;
-
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_cache_bypass $http_upgrade;
-    }
-}
-```
-
-**supervisor/node.conf**
-
-```ini
-[supervisord]
-nodaemon=true
-
-[program:nginx]
-command=/usr/sbin/nginx -g "daemon off;"
-autostart=true
-autorestart=true
-
-[program:node]
-command=npm run start
-directory=/app
-autostart=true
-autorestart=true
-stdout_logfile=/dev/stdout
-stdout_logfile_maxbytes=0
-stderr_logfile=/dev/stderr
-stderr_logfile_maxbytes=0
-```
-
-Access: `http://localhost`
-
----
-
 ## Python
-
-### Without Nginx
 
 **Dockerfile.python**
 
@@ -182,104 +150,16 @@ services:
     ports:
       - "4000:4000"
     tty: true
-    command: sh -c "cd api && python3 index.py"
+    # command: sh -c "python3 index.py"
     networks:
       - app_network
 
 networks:
   app_network:
-    driver: bridge
+    external: true
 ```
 
 Access: `http://localhost:4000`
-
----
-
-### With Nginx
-
-**Dockerfile.python**
-
-```dockerfile
-FROM python:3.13-slim
-
-RUN apt-get update && apt-get install -y \
-    nginx \
-    supervisor \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN pip install flask flask-cors gunicorn
-
-WORKDIR /app
-
-EXPOSE 80
-
-CMD ["/usr/bin/supervisord", "-n"]
-```
-
-**docker-compose.yml**
-
-```yaml
-services:
-  python:
-    build:
-      context: .
-      dockerfile: Dockerfile.python
-    container_name: python-container
-    working_dir: /app
-    volumes:
-      - .:/app
-      - ./nginx/python.conf:/etc/nginx/sites-available/default
-      - ./supervisor/python.conf:/etc/supervisor/conf.d/python.conf
-    ports:
-      - "80:80"
-    networks:
-      - app_network
-
-networks:
-  app_network:
-    driver: bridge
-```
-
-**nginx/python.conf**
-
-```nginx
-server {
-    listen 80;
-    server_name localhost;
-
-    location / {
-        proxy_pass http://127.0.0.1:4000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
-**supervisor/python.conf**
-
-```ini
-[supervisord]
-nodaemon=true
-
-[program:nginx]
-command=/usr/sbin/nginx -g "daemon off;"
-autostart=true
-autorestart=true
-
-[program:gunicorn]
-command=gunicorn -w 4 -b 127.0.0.1:4000 index:app
-directory=/app
-autostart=true
-autorestart=true
-stdout_logfile=/dev/stdout
-stdout_logfile_maxbytes=0
-stderr_logfile=/dev/stderr
-stderr_logfile_maxbytes=0
-```
-
-Access: `http://localhost`
 
 ---
 
@@ -287,8 +167,6 @@ Access: `http://localhost`
 
 > This setup is optimized for Laravel but works for vanilla PHP too.
 > For vanilla PHP, just change `root /app/public` to your document root.
-
-### Without Nginx
 
 **Dockerfile.php**
 
@@ -304,6 +182,7 @@ RUN apt-get update && apt-get install -y \
 # PHP extensions for Laravel
 RUN docker-php-ext-install \
     pdo pdo_mysql pdo_sqlite \
+    mysqli \
     mbstring \
     exif \
     pcntl \
@@ -317,10 +196,10 @@ COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
 # Install Node.js (for Laravel Vite/Mix)
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get update \
     && apt-get install -y nodejs \
+    && npm install -g npm@latest \
     && rm -rf /var/lib/apt/lists/*
-
-RUN npm install -g npm@latest
 
 RUN useradd -u 1000 -m php
 
@@ -344,139 +223,17 @@ services:
     ports:
       - "8080:8080"
     tty: true
-    # Laravel: php artisan serve
-    command: sh -c "php artisan serve --host=0.0.0.0 --port=8080"
-    # Vanilla PHP: php built-in server
-    # command: sh -c "php -S 0.0.0.0:8080 -t public"
+    # command: sh -c "php artisan serve --host=0.0.0.0 --port=8080"
+    # command: sh -c "php -S 0.0.0.0:8080"
     networks:
       - app_network
 
 networks:
   app_network:
-    driver: bridge
+    external: true
 ```
 
 Access: `http://localhost:8080`
-
----
-
-### With Nginx
-
-**Dockerfile.php**
-
-```dockerfile
-FROM php:8.3-fpm
-
-RUN apt-get update && apt-get install -y \
-    nginx supervisor \
-    git curl zip unzip \
-    libpng-dev libonig-dev libxml2-dev libzip-dev \
-    libcurl4-openssl-dev libssl-dev libsqlite3-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# PHP extensions for Laravel
-RUN docker-php-ext-install \
-    pdo pdo_mysql pdo_sqlite \
-    mbstring \
-    exif \
-    pcntl \
-    bcmath \
-    gd \
-    zip \
-    xml \
-    curl
-
-COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
-
-# Install Node.js (for Laravel Vite/Mix)
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN npm install -g npm@latest
-
-WORKDIR /app
-
-EXPOSE 80
-
-CMD ["/usr/bin/supervisord", "-n"]
-```
-
-**docker-compose.yml**
-
-```yaml
-services:
-  php:
-    build:
-      context: .
-      dockerfile: Dockerfile.php
-    container_name: php-container
-    working_dir: /app
-    volumes:
-      - .:/app
-      - ./nginx/php.conf:/etc/nginx/sites-available/default
-      - ./supervisor/php.conf:/etc/supervisor/conf.d/php.conf
-    ports:
-      - "80:80"
-    networks:
-      - app_network
-
-networks:
-  app_network:
-    driver: bridge
-```
-
-**nginx/php.conf**
-
-```nginx
-server {
-    listen 80;
-    server_name localhost;
-
-    # Laravel: /app/public
-    # Vanilla PHP: change to your document root (e.g., /app or /app/public)
-    root /app/public;
-    index index.php index.html;
-
-    location / {
-        try_files $uri $uri/ /index.php?$query_string;
-    }
-
-    location ~ \.php$ {
-        fastcgi_pass 127.0.0.1:9000;
-        fastcgi_index index.php;
-        fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
-        include fastcgi_params;
-    }
-
-    location ~ /\.(?!well-known).* {
-        deny all;
-    }
-}
-```
-
-**supervisor/php.conf**
-
-```ini
-[supervisord]
-nodaemon=true
-
-[program:nginx]
-command=/usr/sbin/nginx -g "daemon off;"
-autostart=true
-autorestart=true
-
-[program:php-fpm]
-command=/usr/local/sbin/php-fpm -F
-autostart=true
-autorestart=true
-stdout_logfile=/dev/stdout
-stdout_logfile_maxbytes=0
-stderr_logfile=/dev/stderr
-stderr_logfile_maxbytes=0
-```
-
-Access: `http://localhost`
 
 ---
 
@@ -591,35 +348,187 @@ networks:
 
 ---
 
-## Quick Start
+### Redis
 
-```bash
-# docker compose (v2)
-# Build and start
-docker compose up -d --build
+**docker-compose.yml**
 
-# View logs
-docker compose logs -f
+```yaml
+services:
+  redis:
+    image: redis:alpine
+    container_name: redis-container
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./redis-data:/data
+    restart: unless-stopped
+    networks:
+      - app_network
 
-# List services
-docker compose ps
-
-# Access container (use service name, not container name)
-docker compose exec node sh
-docker compose exec php bash
-docker compose exec python bash
-
-# Run one-off command
-docker compose exec php composer install
-docker compose exec node npm install
-
-# Stop
-docker compose down
-
-# Stop and reset database
-docker compose down -v
-rm -rf mysql-data postgres-data
+networks:
+  app_network:
+    driver: bridge
 ```
+
+| Field | From Container | From Host |
+|-------|----------------|-----------|
+| Host | `redis` | `localhost` |
+| Port | `6379` | `6379` |
+
+**Connection examples:**
+
+```php
+// Laravel (.env)
+REDIS_HOST=redis
+REDIS_PORT=6379
+```
+
+```javascript
+// Node.js (ioredis)
+const Redis = require('ioredis')
+const redis = new Redis({ host: 'redis', port: 6379 })
+```
+
+```python
+# Python
+import redis
+r = redis.Redis(host='redis', port=6379)
+```
+
+> Add `redis-data` to `.gitignore`.
+
+---
+
+## Environment Variables (.env)
+
+Docker Compose automatically loads a `.env` file from the project root. Use it to pass variables into your containers without hardcoding values.
+
+**.env**
+
+```env
+APP_PORT=3000
+DB_PASSWORD=secret
+NODE_ENV=development
+```
+
+**docker-compose.yml**
+
+```yaml
+services:
+  node:
+    environment:
+      - NODE_ENV=${NODE_ENV}
+      - DB_PASSWORD=${DB_PASSWORD}
+    ports:
+      - "${APP_PORT}:${APP_PORT}"
+```
+
+> Never commit `.env` to git — add it to `.gitignore`. Commit a `.env.example` instead with placeholder values.
+
+---
+
+## Production
+
+In production, run Nginx as a **separate container** in front of your app containers. It handles SSL, domain routing, and acts as a reverse proxy — your apps stay unchanged.
+
+```
+Internet → Nginx (80/443) → app containers (internal ports)
+```
+
+**docker-compose.yml**
+
+```yaml
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: nginx-container
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    networks:
+      - app_network
+    depends_on:
+      - node
+      - python
+      - php
+
+networks:
+  app_network:
+    driver: bridge
+```
+
+**nginx/nginx.conf**
+
+```nginx
+events {}
+
+http {
+    # Node.js app
+    server {
+        listen 443 ssl;
+        server_name node.yourdomain.com;
+
+        ssl_certificate /etc/letsencrypt/live/node.yourdomain.com/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/node.yourdomain.com/privkey.pem;
+
+        location / {
+            proxy_pass http://node:3000;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+        }
+    }
+
+    # Python app
+    server {
+        listen 443 ssl;
+        server_name python.yourdomain.com;
+
+        ssl_certificate /etc/letsencrypt/live/python.yourdomain.com/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/python.yourdomain.com/privkey.pem;
+
+        location / {
+            proxy_pass http://python:4000;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+        }
+    }
+
+    # PHP/Laravel app
+    server {
+        listen 443 ssl;
+        server_name php.yourdomain.com;
+
+        ssl_certificate /etc/letsencrypt/live/php.yourdomain.com/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/php.yourdomain.com/privkey.pem;
+
+        root /app/public;
+        index index.php;
+
+        location / {
+            try_files $uri $uri/ /index.php?$query_string;
+        }
+
+        location ~ \.php$ {
+            fastcgi_pass php:9000;
+            fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
+            include fastcgi_params;
+        }
+    }
+
+    # Redirect HTTP to HTTPS
+    server {
+        listen 80;
+        server_name _;
+        return 301 https://$host$request_uri;
+    }
+}
+```
+
+> SSL certificates can be obtained free via [Let's Encrypt](https://letsencrypt.org/) using Certbot.
+> PHP-FPM speaks FastCGI (not HTTP), so it uses `fastcgi_pass` instead of `proxy_pass`.
 
 ---
 
@@ -628,4 +537,4 @@ rm -rf mysql-data postgres-data
 - Database data is persisted in `mysql-data` and `postgres-data` directories
 - Add these directories to `.gitignore`
 - Modify `command` field to match your project structure
-- For production, consider using separate Nginx container for better scalability
+- For production, use the Nginx setup above — do not use dev servers (`artisan serve`, Flask dev, `npm run dev`) in production
